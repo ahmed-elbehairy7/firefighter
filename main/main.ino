@@ -1,9 +1,8 @@
 uint8_t back = 40;         //the value when the fire is near
-uint8_t t;                //initializing an integer for the value return by Serial.read()
 
 // defining used functions
-void setWheels(uint8_t n);
 bool handleFire();
+void setWheels(uint8_t n);
 
 void setup() {
   //for every pin of the output pins
@@ -34,9 +33,7 @@ void loop() {
     return;             //end the loop
   }
     
-  t = Serial.read();          //Read the value sent by bluetooth
-  
-  setWheels(t);                   //modify the wheels movement as got from the serial
+  setWheels(Serial.read());                   //modify the wheels movement as got from the serial
 }
 
 bool handleFire() {
