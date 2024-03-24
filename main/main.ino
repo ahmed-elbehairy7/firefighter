@@ -1,55 +1,108 @@
-char t;
+uint8_t back = 40;         //the value when the fire is near
+uint8_t t;                //initializing an integer for the value return by Serial.read()
 
-// {left forward, left reverse, right forward, right reverse, left fan, middle fan, right fan}
-int pins[7] = {13, 12, 11, 10, 9, 8, 7};
+// defining used functions
+void setWheels(uint8_t n);
+bool handleFire();
 
 void setup() {
+  //for every pin of the output pins
+  for (uint8_t i = 9; i < 14; i++) {
+    pinMode(i, OUTPUT);            //set the pinmode to output
+  } 
 
-  for (int i = 0; i < 7; i++) {
-    pinMode(pins[i], OUTPUT);
-  }
-  Serial.begin(9600);
+  pinMode(A0, INPUT);       //sensor analog pin
+  pinMode(8, INPUT);        //sensor digital pin
+
+  Serial.begin(9600);         //start serial monitor
  
 }
  
 void loop() {
 
-  //delay 100 ms
-  delay(100);
+  delay(200);             //delay 200 ms
 
-  if (!Serial.available()) {
+  //if fire handled
+  if (handleFire()) {
+    // ignore whatever user sent by bluetooth and continue the loop
     return;
   }
-  
-  //Read the value sent by bluetooth
-  t = Serial.read();
 
-  //print the value
-  Serial.println(t);
-  
-  if(t == 'F'){            //move  forward(all motors rotate in forward direction)
-    digitalWrite(13,HIGH);
-    digitalWrite(11,HIGH);
-  }
-  
-  else if(t == 'B'){      //move reverse (all  motors rotate in reverse direction)
-    digitalWrite(12,HIGH);
-    digitalWrite(10,HIGH);
+  //if nothing sent by bluetooth
+  if (!Serial.available()) {
+    setWheels(0);         //stop the car
+    return;             //end the loop
   }
     
-  else if(t == 'L'){      //turn right (left side motors rotate in forward direction,  right side motors doesn't rotate)
-    digitalWrite(11,HIGH);
-  }
+  t = Serial.read();          //Read the value sent by bluetooth
   
-  else  if(t == 'R'){      //turn left (right side motors rotate in forward direction, left  side motors doesn't rotate)
-    digitalWrite(13,HIGH);
-  }
-  
-  else if(t == 'S'){      //STOP (all motors stop)
+  setWheels(t);                   //modify the wheels movement as got from the serial
+}
 
-    for (int i = 0; i < 4; i++) {
-      digitalWrite(pins[i], LOW);
-    }
+bool handleFire() {
+
+  // return if no fire detected
+  if (!digitalRead(8)) {
+    digitalWrite(9, 0);
+    return false;
   }
-  
+
+  //read the sensor
+  int read = analogRead(A0);
+  Serial.print("sensor: ");
+  Serial.println(read);
+
+  //if fire is so high go back   
+  if (read <= back) {
+    setWheels(42);
+  }
+  // if fire in range, stop the car, turn on the fans and put it off
+  else if (read <= back + 4) {
+    setWheels(0);
+    digitalWrite(9, 1);
+  }
+  // else, go towards the fire
+  else {
+    setWheels(37);
+  }
+  // return true to indicate that a fire is detected
+  return true;
+}
+
+void setWheels(uint8_t n) {
+
+  /*
+    Binary digits for movement:
+      forward 0101
+      backward 1010
+      right 0001
+      left 0100
+      right reverse 1000
+      left reverse 0010
+      stop 0000
+
+      13 left forward; 
+      12 left reverse;
+      11 right forward;
+      10 right reverse;
+  */
+
+  //for every wheel pin
+  digitalWrite(13, n & 1);
+  digitalWrite(12, n & 2);
+  digitalWrite(11, n & 4);
+  digitalWrite(10, n & 8);
+
+
+  //same functionality with for loop
+
+  // // {left forward, left reverse, right forward, right reverse}
+  // uint8_t wheels[nWheels] = {13, 12, 11, 10};
+
+  // //the binary digits to compare with serial value
+  // uint8_t binaries[nWheels] = {1, 2, 4, 8};
+
+  // for (uint8_t i = 0; i < nWheels; i++) {
+  //   digitalWrite(wheels[i], n & binaries[i]);             //write the corresponding current to it
+  // } 
 }
