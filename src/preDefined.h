@@ -4,13 +4,9 @@
 
 // Convert an address into macro
 #define MACRO(mem_addr) (*(volatile char*)(mem_addr))
-// Shift bits
-#define _BIT(bit) (1 << bit)
-// Check if bit is set to 1
-#define bit_is_set(macro, bv) (macro & bv)
-// Check if bit is cleared
-#define bit_is_clear(macro, bv) (!(macro & bv))
 
+//        Defining clock speed
+#define F_CPU 16000000UL
 
 /*
 ////        Defining Registers        
@@ -52,7 +48,13 @@
 
 // ADC Multiplexer Selection Register
 #define ADMUX MACRO(0x7C)
+#define REFS1 7     // Reference Selection Bit 1
+#define REFS0 6     // Reference Selection Bit 0
 #define ADLAR 5     // ADC Left Adjust Result
+#define MUX3 3      // Analog Channel Selection Bit 3
+#define MUX2 2      // Analog Channel Selection Bit 2
+#define MUX1 1      // Analog Channel Selection Bit 1
+#define MUX0 0      // Analog Channel Selection Bit 0
 
 // Digital Input Disable Register 0
 #define DIDR0 MACRO(0x7E)
@@ -63,11 +65,19 @@
 #define ADC1D 1
 #define ADC0D 0
 
+// Digital Input Disable Register 1
+#define DIDR1 MACRO(0x7F)
+#define AIN1D 1     // Digital input disable 1
+#define AIN0D 0     // Digital input disable 0
+
 // USART Control and Status Register 0 A
 #define UCSR0A MACRO(0xC0)
 #define RXC0 7      // USART Receive Complete
 #define TXC0 6      // USART Transmit Complete
 #define UDRE0 5     // USART Data Register Empty
+#define FE0 4       // Frame Error
+#define DOR0 3      // Data OverRun
+#define UPE0 2      // USART Parity Error
 
 // USART Control and Status Register 0 B
 #define UCSR0B MACRO(0xC1)
