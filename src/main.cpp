@@ -7,11 +7,6 @@
 #define BAUD 9600
 #define MYUBRR F_CPU/(long(16) * BAUD) -1
 
-// defining when to tell fire is close
-#define range 0x50
-// variable to save analog reads
-char analogRead;
-
 #define bitIsSet(macro, bit) ((macro & _BV(bit)))
 #define bitIsClear(macro, bit) (!(macro & _BV(bit)))
 #define loopUntilBitIsSet(macro, bit) do { } while (bitIsSet(macro, bit))
@@ -20,16 +15,10 @@ char analogRead;
 /*
 ////        including liberaries        
 */
-
 #define __AVR_ATmega328P__
-#include <avr/io.h>
+#include <avr/interrupt.h>
 #include <avr/cpufunc.h>
 #include <util/delay.h>
-
-/*
-////        Defining used functions        
-*/
-bool handleFire();
 
 /*
 ////        Main job        
@@ -68,10 +57,10 @@ int main() {
     some configuration for us
   */
   // configuring settings for analog input
-  // DIDR0 |= _BV(ADC5D) | _BV(ADC4D) | _BV(ADC3D) | _BV(ADC2D) | _BV(ADC1D);   //disabling digital inputs for unused adc pins
-  // DIDR1 |= _BV(AIN1D) | _BV(AIN0D);             //disabling digital inputs for unused ain pins
-  // PRR |= _BV(PRADC);       // turning off adc from prr
-  ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
+  DIDR0 |= _BV(ADC5D) | _BV(ADC4D) | _BV(ADC3D) | _BV(ADC2D) | _BV(ADC1D) | _BV(ADC0D);   //disabling digital inputs for unused adc pins
+  DIDR1 |= _BV(AIN1D) | _BV(AIN0D);             //disabling digital inputs for unused ain pins
+  PRR |= _BV(PRADC);       // turning off adc from prr
+  //ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
 
   /* Arduino abstracted:
     Serial.begin(9600);
@@ -85,30 +74,97 @@ int main() {
   UCSR0C = _BV(UCSZ01) | _BV(UCSZ00);
 
 
+  // Enabling global interrupt
+  SREG |= _BV(SREG_I);
+
+  // Enabling port b interrupt
+  PCICR |= _BV(PCIE0);
+
+  // Enabling pin change interrupt for pin 8
+  PCMSK0 |= _BV(PCINT0);
+
+  // Enabling rx interrupt
+  UCSR0B |= _BV(RXCIE0);
   /*
   ////        Loop        
   */
 
   while (true)
   {
-    /* Arduino abstracted
-      delay(500);
-    */
-    //_delay_ms(150);
+    ;
+  }
+  
 
-    // handle the fire
-    if (handleFire()) {
-      continue;
+}
+
+ISR(PCINT0_vect) {
+
+  /* Arduino abstracted:
+    char read = digitalread(8);
+    if (!read) {
+    digitalWrite(8, LOW);
+    return false;
     }
+  */
+  // return if no fire detected from sensor digital input
+  PORTB |= _BV(PB0);       // set a pullover on pin 0 to read it by pinb
+  // insert a nop
+  _NOP();
+  // if sensor detects fire
+  if (bit_is_set(PINB, PINB0)) {
+    // make sure fan is on
+    PORTB |= _BV(PB1);
+  }
+  else {
+    // make sure fan is off
+    PORTB &= ~_BV(PB1);
+  }
 
-    /* Arduino abstracted
-      Serial.available();
-    */
-    // checking if nothing recieved from serial by checking RXC0 bit from the UCSR0A register "Serial.available();"
-    if (bitIsClear(UCSR0A, RXC0)) {
-      continue;
-    }
+  // /* Arduino abstracted:
+  //   char analogRead = analogRead(A0);
+  // */
+  // // Read the sensor analog data
+  // PRR &= ~_BV(PRADC);       // turning on adc from prr
+  // ADMUX &= ~(_BV(MUX0) | _BV(MUX1) | _BV(MUX2) | _BV(MUX3));              // Setting the channel input to adc0 right before convertion
+  // ADCSRA |= _BV(ADEN) | _BV(ADSC);       //ADEN enables ADC and ADSC starts a conversion 
+  // loopUntilBitIsSet(ADCSRA, ADSC);      // waiting for the read to complete
+  // analogRead = ADCH;          //Reading the value of the adc data register
+  // ADCSRA &= ~_BV(ADEN);       //Resetting the ADEN bit to zero again
 
+  // /* Arduino abstracted:
+  //   Serial.print(read);
+  // */
+  // // Sending data by tx 
+  // // Wait for empty transmit buffer
+  // bitIsClear(UCSR0A, UDRE0);
+
+  // // Put data into buffer, sends the data
+  // UDR0 = analogRead;
+
+  // // if fire in range, turn on the fans, stop the car and put it off
+  // if (analogRead <= range) {
+  //   /* Arduino abstracted:
+  //     digitalWrite(8, HIGH);
+  //   */
+  //   // turning the fan on
+  //   PORTB = _BV(PB1);
+  //   return false;
+  // }
+
+  // /* Arduino abstracted:
+  //   digitalWrite(13, HIGH);
+  //   digitalWrite(12, LOW);
+  //   digitalWrite(11, HIGH);
+  //   digitalWrite(10, LOW);
+  // */
+  // // else, go towards the fire
+  // PORTB = _BV(PB5) | _BV(PB3);
+  // return true;
+}
+
+
+ISR (USART_RX_vect) {
+  
     /* Arduino abstracted
 
       char rxVal = Serial.read() & ~(1 << 6);
@@ -144,10 +200,10 @@ int main() {
     */
 
    //error checking
-    if (UCSR0A & _BV(FE0) | _BV(DOR0) | _BV(UPE0)) {
-        PORTB = 0;
-        continue;
-    }
+    // if (UCSR0A & _BV(FE0) | _BV(DOR0) | _BV(UPE0)) {
+    //     PORTB = 0;
+    //     continue;
+    // }
 
     // forward  h => 104 => 01101000    ||   ( => 040 => 00101000
     // backward T => 084 => 01010100
@@ -164,72 +220,4 @@ int main() {
     */
     // empty the registery from unwanted data
     while ( bitIsSet(UCSR0A, RXC0) ) {volatile char dummy = UDR0;}
-
-  }
-  
-
-}
-
-bool handleFire() {
-
-  /* Arduino abstracted:
-    char read = digitalread(8);
-    if (!read) {
-    digitalWrite(8, LOW);
-    return false;
-    }
-  */
-  // return if no fire detected from sensor digital input
-  PORTB |= _BV(PB0);       // set a pullover on pin 0 to read it by pinb
-
-  // insert a nop
-  _NOP();
-  // if no electricity in pin number 8
-  if (bitIsClear(PINB, PINB0)) {
-    // make sure fan is off
-    PORTB &= ~_BV(PB1);
-    return false;
-  }
-
-  /* Arduino abstracted:
-    char analogRead = analogRead(A0);
-  */
-  // Read the sensor analog data
-  PRR &= ~_BV(PRADC);       // turning on adc from prr
-  ADMUX &= ~(_BV(MUX0) | _BV(MUX1) | _BV(MUX2) | _BV(MUX3));              // Setting the channel input to adc0 right before convertion
-  ADCSRA |= _BV(ADEN) | _BV(ADSC);       //ADEN enables ADC and ADSC starts a conversion 
-  loopUntilBitIsSet(ADCSRA, ADSC);      // waiting for the read to complete
-  analogRead = ADCH;          //Reading the value of the adc data register
-  ADCSRA &= ~_BV(ADEN);       //Resetting the ADEN bit to zero again
-
-  /* Arduino abstracted:
-    Serial.print(read);
-  */
-  // Sending data by tx 
-  // Wait for empty transmit buffer
-  bitIsClear(UCSR0A, UDRE0);
-
-  // Put data into buffer, sends the data
-  UDR0 = analogRead;
-
-  // if fire in range, turn on the fans, stop the car and put it off
-  if (analogRead <= range) {
-    /* Arduino abstracted:
-      digitalWrite(8, HIGH);
-    */
-    // turning the fan on
-    PORTB = _BV(PB1);
-    return false;
-  }
-
-  /* Arduino abstracted:
-    digitalWrite(13, HIGH);
-    digitalWrite(12, LOW);
-    digitalWrite(11, HIGH);
-    digitalWrite(10, LOW);
-  */
-  // else, go towards the fire
-  PORTB = _BV(PB5) | _BV(PB3);
-  return true;
-
 }
