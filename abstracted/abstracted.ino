@@ -1,89 +1,94 @@
+// including libraries
+#include <AFMotor.h>
 
-// defining when to tell fire is close
-#define range 10
+// defining constants
+#define SENSOR 8
+#define SPEED 255
 
-char rxVal;
-char read;
+// functions prototypes
+void handleFire();
+void moveCar();
 
-// Defining used functions        
-bool handleFire();
-
-/*
-////        Setup        
-*/
+// motors instances
+AF_DCMotor fan(1);
+AF_DCMotor left(2);
+AF_DCMotor right(3);
 
 void setup() {
-    pinMode(13, OUTPUT);
-    pinMode(12, OUTPUT);
-    pinMode(11, OUTPUT);
-    pinMode(10, OUTPUT);
-    pinMode(9, OUTPUT);
-    pinMode(8, INPUT);
+  // put your setup code here, to run once:
 
-    analogReference(INTERNAL);
+  // Start serial with 9600 baud rate
+  Serial.begin(9600);
 
-    Serial.begin(9600);
+  // initialize motor speeds
+  fan.setSpeed(SPEED);
+  left.setSpeed(SPEED);
+  right.setSpeed(SPEED);
 }
 
-  /*
-  ////        Loop        
-  */
 void loop() {
-    delay(500);
+  // put your main code here, to run repeatedly:
+  // function that handle the fire
+  handleFire();
 
-    // handle the fire
-    if (handleFire()) {
-        return;
-    }
+  // function to handle car movement
+  moveCar();
 
-    // checking if anything is recieved
-    if (!Serial.available()) {
-        return;
-    }
+}
 
-    // forward  h => 104 => 01101000    ||   ( => 040 => 00101000
-    // backward T => 084 => 01010100
-    // right    ` => 096 => 01100000
-    // left     H => 072 => 01001000
-    // stop     @ => 064 => 01000000
-    // fan on   B => 066   => 01000010
+void handleFire() {
+  // read data from sensor
+  // if fire detected
+  if (digitalRead(SENSOR)) {
+    // turn fan on
+    fan.run(FORWARD);
+  }
+  else {
+    // turn fan off
+    fan.run(RELEASE);
+  }
+}
 
-    rxVal = Serial.read() & ~(1 << 6);
-    digitalWrite(13, rxVal & (1 << 5));
-    digitalWrite(12, rxVal & (1 << 4));
-    digitalWrite(11, rxVal & (1 << 3));
-    digitalWrite(10, rxVal & (1 << 2));
-    digitalWrite(9, rxVal & (1 << 1));
+void moveCar() {
 
-    while( Serial.available()) {
-        Serial.read();
-    }
+  // if there's nothing recieved from bluetooth sensor:
+  //    exit;
+  if (!Serial.available()) {
+    return;
+  }
+  // else:
+  //    move car according to command recieved by bluetooth
 
-    Serial.print(rxVal);
+  switch (Serial.read()) {
+    // forward case
+    case 'F':
+      left.run(FORWARD);
+      right.run(FORWARD);
+      break;
+
+    // backward case
+    case 'B':
+      right.run(BACKWARD);
+      left.run(BACKWARD);
+      break;
+
+    // left case 
+    case 'L':
+      right.run(FORWARD);
+      left.run(RELEASE);
+      break;
+    
+    // right case
+    case 'R':
+      left.run(FORWARD);
+      right.run(RELEASE);
+      break;
+
+    // default case
+    default:
+      left.run(RELEASE);
+      right.run(RELEASE);
+      break;
   }
 
-bool handleFire() {
-
-    read = digitalRead(8);
-    if (!read) {
-    digitalWrite(8, LOW);
-    return false;
-    }
-
-    read = analogRead(A0);
-
-    Serial.print(read);
-
-  // if fire in range, turn on the fans, stop the car and put it off
-    if (read <= range) {
-        digitalWrite(8, HIGH);
-        return false;
-    }
-    
-    // else, go towards the fire
-    digitalWrite(13, HIGH);
-    digitalWrite(12, LOW);
-    digitalWrite(11, HIGH);
-    digitalWrite(10, LOW);
-    return true;
 }

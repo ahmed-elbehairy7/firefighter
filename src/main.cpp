@@ -19,6 +19,9 @@
 #include <avr/interrupt.h>
 #include <avr/cpufunc.h>
 #include <util/delay.h>
+#include <avr/sleep.h>
+#include <avr/interrupt.h>
+
 
 /*
 ////        Main job        
@@ -56,12 +59,6 @@ int main() {
     sets the analogReference to AREF pin and do 
     some configuration for us
   */
-  // configuring settings for analog input
-  DIDR0 |= _BV(ADC5D) | _BV(ADC4D) | _BV(ADC3D) | _BV(ADC2D) | _BV(ADC1D) | _BV(ADC0D);   //disabling digital inputs for unused adc pins
-  DIDR1 |= _BV(AIN1D) | _BV(AIN0D);             //disabling digital inputs for unused ain pins
-  PRR |= _BV(PRADC);       // turning off adc from prr
-  //ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
-
   /* Arduino abstracted:
     Serial.begin(9600);
   */
@@ -85,6 +82,23 @@ int main() {
 
   // Enabling rx interrupt
   UCSR0B |= _BV(RXCIE0);
+
+  /*
+  //// sleep
+  */
+
+  // PRR = 0b11101101;       // turning off most of power consuming stuff
+  // ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
+
+  // // Enabling sleep mode and setting the sleep mode to idle
+  // SMCR |= _BV(SE);
+
+  // // powering down the adc analog comprator
+  // ACSR |= _BV(ACD);
+
+  // // sleep instruction
+  // sleep_cpu();
+
   /*
   ////        Loop        
   */
@@ -97,6 +111,7 @@ int main() {
 
 }
 
+
 ISR(PCINT0_vect) {
 
   /* Arduino abstracted:
@@ -106,11 +121,18 @@ ISR(PCINT0_vect) {
     return false;
     }
   */
+
   // return if no fire detected from sensor digital input
   PORTB |= _BV(PB0);       // set a pullover on pin 0 to read it by pinb
   // insert a nop
   _NOP();
   // if sensor detects fire
+
+  // loopUntilBitIsClear(UCSR0A, UDRE0);
+
+  // // // Put data into buffer, sends the data
+  // UDR0 = PINB;
+  
   if (bit_is_set(PINB, PINB0)) {
     // make sure fan is on
     PORTB |= _BV(PB1);
@@ -128,7 +150,7 @@ ISR(PCINT0_vect) {
   // ADMUX &= ~(_BV(MUX0) | _BV(MUX1) | _BV(MUX2) | _BV(MUX3));              // Setting the channel input to adc0 right before convertion
   // ADCSRA |= _BV(ADEN) | _BV(ADSC);       //ADEN enables ADC and ADSC starts a conversion 
   // loopUntilBitIsSet(ADCSRA, ADSC);      // waiting for the read to complete
-  // analogRead = ADCH;          //Reading the value of the adc data register
+  // short analogRead = ADCH;          //Reading the value of the adc data register
   // ADCSRA &= ~_BV(ADEN);       //Resetting the ADEN bit to zero again
 
   // /* Arduino abstracted:
@@ -136,19 +158,19 @@ ISR(PCINT0_vect) {
   // */
   // // Sending data by tx 
   // // Wait for empty transmit buffer
-  // bitIsClear(UCSR0A, UDRE0);
+  // loopUntilBitIsClear(UCSR0A, UDRE0);
 
   // // Put data into buffer, sends the data
   // UDR0 = analogRead;
 
   // // if fire in range, turn on the fans, stop the car and put it off
-  // if (analogRead <= range) {
+  // if (analogRead <= RANGE) {
   //   /* Arduino abstracted:
   //     digitalWrite(8, HIGH);
   //   */
   //   // turning the fan on
   //   PORTB = _BV(PB1);
-  //   return false;
+  //   return;
   // }
 
   // /* Arduino abstracted:
@@ -159,7 +181,7 @@ ISR(PCINT0_vect) {
   // */
   // // else, go towards the fire
   // PORTB = _BV(PB5) | _BV(PB3);
-  // return true;
+  // return;
 }
 
 
@@ -210,7 +232,7 @@ ISR (USART_RX_vect) {
     // right    ` => 096 => 01100000
     // left     H => 072 => 01001000
     // stop     @ => 064 => 01000000
-    // fan on   B => 066   => 01000010
+    // fan on   B => 066 => 01000010
     PORTB = UDR0 & (~(1 << 6)); // modify the wheels movement as got from the serial
 
     /* Arduino abstracted:
