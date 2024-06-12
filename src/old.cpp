@@ -1,7 +1,8 @@
 /*
-////        Defining constants      
+////        Defining some used stuff        
 */
 
+// Defining F_CPU, rx & tx ubrr and baud rate
 #define F_CPU 16000000UL
 #define BAUD 9600
 #define MYUBRR F_CPU/(long(16) * BAUD) -1
@@ -13,7 +14,9 @@
 #define SERVO 9
 #define SERVO_DELAY 9
 #define REACH_DIFF 30
-
+#define LB 0
+#define RB 2
+#define WB 4
 
 /*
 ////        Defining bit functions
@@ -24,19 +27,22 @@
 #define loopUntilBitIsSet(macro, bit) do { } while (bitIsSet(macro, bit))
 #define loopUntilBitIsClear(macro, bit) do { } while (bitIsClear(macro, bit))
 
-
 /*
 ////        including liberaries        
 */
 
-#include <AFMotor.h>
 #include <avr/interrupt.h>
-#include <Arduino.h>
+#include <avr/cpufunc.h>
+#include <avr/sleep.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <AFMotor.h>
+
+#define ARDUINO_ARCH_AVR
+
 #include <Servo.h>
 
-/*
-////        Initializing variables
-*/
+
 
 AF_DCMotor weapon(1);
 AF_DCMotor left(2);
@@ -62,7 +68,7 @@ char rxCommands[8][3] = {
     {RELEASE ,  RELEASE , RELEASE },          // STOP ALL:      7         G
 };
 
-AF_DCMotor rxRecievers[3] = {left, right, weapon};
+AF_DCMotor motors[3] = {left, right, weapon};
 
 
 /*
@@ -70,51 +76,85 @@ AF_DCMotor rxRecievers[3] = {left, right, weapon};
 */
 
 void handleRX();
-void handleFire();
+void handleFile();
 void putOff(int direction);
 void servoWrite(int angle);
 
-
 /*
-////        Setup        
+////        Main job        
 */
 
-void setup() {
+int main() {
 
-  // Initializing speeds of motors
+  /*
+  ////        Setup        
+  */
+
+  //Set speeds of motors
+
   for (char i = 0; i < 2; i++) {
-    rxRecievers[i].setSpeed(SPEED);
+    motors[i].setSpeed(SPEED);
   }
   servo.attach(SERVO);
 
 
-  /* 
-    Starting the serial 
-  */
-
-  // Set baud rate
+  // Start the serial monitor
+  // Set baud rate for the serial monitor
   UBRR0H =(MYUBRR >> 8);
   UBRR0L = MYUBRR;
   // Enable receiver and transmitter
-  UCSR0B = _BV(RXEN0);
+  UCSR0B = _BV(RXEN0) | _BV(TXEN0);
   // Set frame format: 8data, 1stop bit
   UCSR0C = _BV(UCSZ01) | _BV(UCSZ00);
 
+
+  // Enabling global interrupt
+  SREG |= _BV(SREG_I);
+
+  // Enabling rx interrupt
+  UCSR0B |= _BV(RXCIE0);
+
+  /*
+  //// sleep
+  */
+
+  // PRR = 0b11101101;       // turning off most of power consuming stuff
+  // ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
+
+  // // Enabling sleep mode and setting the sleep mode to idle
+  // SMCR |= _BV(SE);
+
+  // // powering down the adc analog comprator
+  // ACSR |= _BV(ACD);
+
+  // // sleep instruction
+  // sleep_cpu();
+
+  /*
+  ////        Loop        
+  */
+
+  while (true)
+  {
+    handleFile();
+    handleRX();
+  }
+  
+
 }
 
 
-/*
-////        Loop function
-*/
+// ISR (USART_RX_vect) {
+  
+//     //error checking
+//     if (UCSR0A & _BV(FE0) | _BV(DOR0) | _BV(UPE0)) {
+//         PORTB = 0;
+//         continue;
+//     }
 
-void loop() {
+//     while ( bitIsSet(UCSR0A, RXC0) ) {volatile char dummy = UDR0;}
+// }
 
-  // The function responsible for handling bluetooth commands
-  handleRX();
-
-  // The function responsible for handling fire detection
-  handleFire();
-}
 
 
 /*
@@ -138,17 +178,15 @@ void handleRX() {
 
   // For every motor on the shield, execute the appropriate command
   for (char i = 0; i < 3; i++) {
-    rxRecievers[i].run(rxCommands[index][i]);
+    motors[i].run(rxCommands[index][i]);
   }
 
   // For the weapon, make sure to update values of manuallyOn
   switch (rxCommands[index][2]) {
-      case 0:
-        return;
       case FORWARD:
         manuallyOn = true;
         break;
-      default:
+      case RELEASE:
         manuallyOn = false;
         break;
     }
@@ -168,16 +206,16 @@ void handleRX() {
 void handleFire() {
 
   // For every sensor of the sensors
-  for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start-= 60) {
+  // for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start-= 60) {
 
-    // if fire detected from that senosr
-    if (!digitalRead(sensor)) {
+  //   // if fire detected from that senosr
+  //   if (!digitalRead(sensor)) {
 
-      // put off that fire then return
-      putOff(start);
-      return;
-    }
-  }
+  //     // put off that fire then return
+  //     putOff(start);
+  //     return;
+  //   }
+  // }
 
   // If no fire is detected and also the weapon not turned on manually
   if (!manuallyOn) {
@@ -256,7 +294,6 @@ void servoWrite(int angle) {
     servoAngle = i;
 
     // Delay 5 seconds
-    delay(SERVO_DELAY);
+    _delay_ms(SERVO_DELAY * 1000);
   }
 }
-

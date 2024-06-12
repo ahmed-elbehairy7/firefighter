@@ -1,90 +1,87 @@
+
 /*
-////        Defining some used stuff        
+////        including liberaries
 */
 
-// Defining F_CPU, rx & tx ubrr and baud rate
-#define F_CPU 16000000UL
-#define BAUD 9600
-#define MYUBRR F_CPU/(long(16) * BAUD) -1
+#include "global.h"
+#include "motor.h"
+#include "servo.h"
+#include "serial.h"
 
-#define bitIsSet(macro, bit) ((macro & _BV(bit)))
-#define bitIsClear(macro, bit) (!(macro & _BV(bit)))
-#define loopUntilBitIsSet(macro, bit) do { } while (bitIsSet(macro, bit))
-#define loopUntilBitIsClear(macro, bit) do { } while (bitIsClear(macro, bit))
 
 /*
-////        including liberaries        
+////        Defining constants
 */
-#define __AVR_ATmega328P__
-#include <avr/interrupt.h>
-#include <avr/cpufunc.h>
-#include <util/delay.h>
-#include <avr/sleep.h>
-#include <avr/interrupt.h>
+
+#define NUM_OF_COMMANDS 8
+#define LEFT_SENSOR PC1
+#define LEFT_START 120
+#define RIGHT_SENSOR PC3
+#define CENTER 90
+#define REACH_DIFF 30
 
 
 /*
-////        Main job        
+////        Initializing variables
+*/
+
+Motor weapon(1);
+Motor left(2);
+Motor right(3);
+Motor motors[3] = {left, right, weapon};
+Servo servo(9);
+bool manuallyOn = false;
+bool reachIncrement;
+uint8_t reach;
+
+
+/*
+////        List of rx commands
+*/
+
+uint8_t rxCommands[NUM_OF_COMMANDS][3] = {
+//  {left    ,  right   , weapon  },          // Title          index     alphabet character
+    {FORWARD ,  FORWARD , 0       },          // Forward        0         @
+    {RELEASE ,  FORWARD , 0       },          // Left:          1         A
+    {FORWARD ,  RELEASE , 0       },          // Right:         2         B
+    {BACKWARD,  BACKWARD, 0       },          // Back:          3         C
+    {RELEASE ,  RELEASE , 0       },          // Stop wheels:   4         D
+    {0       ,  0       , FORWARD },          // Weapon on:     5         E
+    {0       ,  0       , RELEASE },          // Weapon off:    6         F
+    {RELEASE ,  RELEASE , RELEASE },          // STOP ALL:      7         G
+};
+
+
+/*
+////        Prototypes
+*/
+void putOff(int direction);
+
+
+/*
+////        Main
 */
 
 int main() {
 
   /*
-  ////        Setup        
+    Start serial monitor
   */
-
-
-  //for every pin of the output pins
-  // left forward, left reverse, right forward, right reverse, fan, sensor DO
-  // ports:  PB5 PB4 PB3 PB2 PB1 PB0
-  // pins:   13  12  11  10  09  08
-  // binary: 1   1   1   1   1   0   = 62 in decimal
-
-  /* Arduino abstracted:
-    pinMode(13, OUTPUT);
-    pinMode(12, OUTPUT);
-    pinMode(11, OUTPUT);
-    pinMode(10, OUTPUT);
-    pinMode(9, OUTPUT);
-    PinMode(8, INPUT);
-  */
-  DDRB = _BV(DDB5) | _BV(DDB4) | _BV(DDB3) | _BV(DDB2) | _BV(DDB1);
-  // (*(volatile char *)0x53) |= 7;
+  Serial::begin();
 
   /*
-    lines until ADMUX = ... probably not abstracted by arduino
-    analogReference(INTERNAL);
-    __LOGIC__:: the first line disables analog ports 
-    so it doesn't consume power, and the second one 
-    sets the analogReference to AREF pin and do 
-    some configuration for us
+    Interrupts
   */
-  /* Arduino abstracted:
-    Serial.begin(9600);
-  */
-  // Set baud rate
-  UBRR0H =(MYUBRR >> 8);
-  UBRR0L = MYUBRR;
-  // Enable receiver and transmitter
-  UCSR0B = _BV(RXEN0) | _BV(TXEN0);
-  // Set frame format: 8data, 1stop bit
-  UCSR0C = _BV(UCSZ01) | _BV(UCSZ00);
 
-
-  // Enabling global interrupt
-  SREG |= _BV(SREG_I);
-
-  // Enabling port b interrupt
-  PCICR |= _BV(PCIE0);
-
-  // Enabling pin change interrupt for pin 8
-  PCMSK0 |= _BV(PCINT0);
+  // Enable global interrupts
+  sei();
 
   // Enabling rx interrupt
   UCSR0B |= _BV(RXCIE0);
 
+
   /*
-  //// sleep
+    sleep
   */
 
   // PRR = 0b11101101;       // turning off most of power consuming stuff
@@ -100,146 +97,139 @@ int main() {
   // sleep_cpu();
 
   /*
-  ////        Loop        
+    Main loop
   */
 
   while (true)
   {
-    ;
+    []()
+    {
+      // For every sensor of the sensors
+      for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start -= 60)
+      {
+
+        // return if no fire detected from sensor digital input
+        PORTC |= _BV(sensor); // set a pullover on pin 0 to read it by pinb
+        // insert a nop
+        _NOP();
+
+        // if fire detected from that senosr
+        if (bitIsClear(PINC, sensor))
+        {
+
+          // put off that fire then return
+          putOff(start);
+          return;
+        }
+      }
+
+      // If no fire is detected and also the weapon not turned on manually
+      if (!manuallyOn)
+      {
+
+        // make sure the weapon is not running
+        weapon.run(RELEASE);
+
+        // make the weapon look forward
+        servo.write(CENTER);
+
+        // Return reach to zero
+        reach = 0;
+      }
+    }();
   }
   
 
 }
 
+ISR(USART_RX_vect) {
+  // Get the operation code {index} by getting only the first five bits
+  uint8_t index = Serial::read() & ~0b11100000;
 
-ISR(PCINT0_vect) {
+  if (index > NUM_OF_COMMANDS) {
+    return;
+  }
+  Serial::print("Recieved command: ");
+  Serial::print(index);
+  Serial::print('\n');
 
-  /* Arduino abstracted:
-    char read = digitalread(8);
-    if (!read) {
-    digitalWrite(8, LOW);
-    return false;
+  // For every motor on the shield, execute the appropriate command
+  for (char i = 0; i < 3; i++) {
+    motors[i].run(rxCommands[index][i]);
+  }
+
+  // For the weapon, make sure to update values of manuallyOn
+  switch (rxCommands[index][2]) {
+      case 0:
+        return;
+      case FORWARD:
+        manuallyOn = true;
+        break;
+      default:
+        manuallyOn = false;
+        break;
     }
-  */
+}
 
-  // return if no fire detected from sensor digital input
-  PORTB |= _BV(PB0);       // set a pullover on pin 0 to read it by pinb
-  // insert a nop
-  _NOP();
-  // if sensor detects fire
-
-  // loopUntilBitIsClear(UCSR0A, UDRE0);
-
-  // // // Put data into buffer, sends the data
-  // UDR0 = PINB;
+void putOff(int direction) {
   
-  if (bit_is_set(PINB, PINB0)) {
-    // make sure fan is on
-    PORTB |= _BV(PB1);
+  // Turn on the fan
+  weapon.run(FORWARD);
+
+  switch (reachIncrement) {
+    case true:
+      if (reach == 60) {
+        reachIncrement = false;
+        return;
+      }
+      reach += REACH_DIFF;
+      break;
+    default:
+      if (reach == 0) {
+        reachIncrement = true;
+        return;
+      }
+      reach -= REACH_DIFF;
+      break; 
+  }
+
+  // Turn the servo to direction + reach
+  servo.write(direction + reach);
+
+}
+uint8_t n = 0;
+
+SIGNAL(TIMER1_COMPA_vect) {
+
+   if( n < 0 )
+    TCNT1 = 0; // channel set to -1 indicated that refresh interval completed so reset the timer
+  else{
+      PORTD &= ~_BV(servo.pin); // pulse this channel low
+  }
+
+  n++;    // increment to the next channel
+  if( n < 1) {
+    OCR1A = TCNT1 + servo.ticks;
+    PORTD |= _BV(servo.pin); // it's an active channel so pulse it high
   }
   else {
-    // make sure fan is off
-    PORTB &= ~_BV(PB1);
+    if( TCNT1 + 4 < usToTicks(REFRESH_INTERVAL) )  // allow a few ticks to ensure the next OCR1A not missed
+      OCR1A = (unsigned int)usToTicks(REFRESH_INTERVAL);
+    else
+      OCR1A = TCNT1 + 4;  // at least REFRESH_INTERVAL has elapsed
+    n -1; // this will get incremented at the end of the refresh period to start again at the first channel
   }
 
-  // /* Arduino abstracted:
-  //   char analogRead = analogRead(A0);
-  // */
-  // // Read the sensor analog data
-  // PRR &= ~_BV(PRADC);       // turning on adc from prr
-  // ADMUX &= ~(_BV(MUX0) | _BV(MUX1) | _BV(MUX2) | _BV(MUX3));              // Setting the channel input to adc0 right before convertion
-  // ADCSRA |= _BV(ADEN) | _BV(ADSC);       //ADEN enables ADC and ADSC starts a conversion 
-  // loopUntilBitIsSet(ADCSRA, ADSC);      // waiting for the read to complete
-  // short analogRead = ADCH;          //Reading the value of the adc data register
-  // ADCSRA &= ~_BV(ADEN);       //Resetting the ADEN bit to zero again
+  // TCNT1 = 0;
 
-  // /* Arduino abstracted:
-  //   Serial.print(read);
-  // */
-  // // Sending data by tx 
-  // // Wait for empty transmit buffer
-  // loopUntilBitIsClear(UCSR0A, UDRE0);
+  // PORTD &= ~_BV(servo.pin);
 
-  // // Put data into buffer, sends the data
-  // UDR0 = analogRead;
+  // OCR1A = TCNT1 + servo.ticks;
 
-  // // if fire in range, turn on the fans, stop the car and put it off
-  // if (analogRead <= RANGE) {
-  //   /* Arduino abstracted:
-  //     digitalWrite(8, HIGH);
-  //   */
-  //   // turning the fan on
-  //   PORTB = _BV(PB1);
-  //   return;
-  // }
+  // PORTD |= _BV(servo.pin);
 
-  // /* Arduino abstracted:
-  //   digitalWrite(13, HIGH);
-  //   digitalWrite(12, LOW);
-  //   digitalWrite(11, HIGH);
-  //   digitalWrite(10, LOW);
-  // */
-  // // else, go towards the fire
-  // PORTB = _BV(PB5) | _BV(PB3);
-  // return;
-}
-
-
-ISR (USART_RX_vect) {
-  
-    /* Arduino abstracted
-
-      char rxVal = Serial.read() & ~(1 << 6);
-      digitalWrite(13, rxVal & (1 << 5));
-      digitalWrite(12, rxVal & (1 << 4));
-      digitalWrite(11, rxVal & (1 << 3));
-      digitalWrite(10, rxVal & (1 << 2));
-      digitalWrite(9, rxVal & (1 << 1));
-
-    __NOTE__:: 
-    there's no abstracted version of this because
-    there's no digitalWrite for 5 pins at the same time. So,
-    what this function does is setting the pins 13->8 to high
-    and low based on the binary digit got from the serial or
-    to be more percise RX
-    this code includes some bitwise operations, search for 
-    that term if you don't know the function of &, ~, <<.
-    __LOGIC__::
-    So, first you have to know what's actually HIGH and LOW
-    simply they're the result of this code:
-    #define HIGH 1
-    #define LOW 0
-    1 means true and low means false as  a boolean data type,
-    second, how we know which pin to set to high is by reading 
-    the binary digits of the recieved value of Serial.read()
-    for example the character F will have the binary digits of
-    01000110 and the character 'h' will be 01101000. more on 
-    that here: https://ascii-code.com
-    so, pin 13 will always be the 6th digit from right of 
-    the recieved value by the serial (RX), and the expression
-    "rxVal & (1 << 5)" gives us this bit whether if it's 1 or
-    zero
-    */
-
-   //error checking
-    // if (UCSR0A & _BV(FE0) | _BV(DOR0) | _BV(UPE0)) {
-    //     PORTB = 0;
-    //     continue;
-    // }
-
-    // forward  h => 104 => 01101000    ||   ( => 040 => 00101000
-    // backward T => 084 => 01010100
-    // right    ` => 096 => 01100000
-    // left     H => 072 => 01001000
-    // stop     @ => 064 => 01000000
-    // fan on   B => 066 => 01000010
-    PORTB = UDR0 & (~(1 << 6)); // modify the wheels movement as got from the serial
-
-    /* Arduino abstracted:
-      while( Serial.available()) {
-        Serial.read();
-      }
-    */
-    // empty the registery from unwanted data
-    while ( bitIsSet(UCSR0A, RXC0) ) {volatile char dummy = UDR0;}
+  // if (TCNT1 + 4 < usToTicks(REFRESH_INTERVAL)) // allow a few ticks to ensure the next OCR1A not missed
+  //   OCR1A = (unsigned int)usToTicks(REFRESH_INTERVAL);
+  // else
+  //   OCR1A = TCNT1 + 4; // at least REFRESH_INTERVAL has elapsed
 }
