@@ -4,7 +4,7 @@
 
 #define F_CPU 16000000UL
 #define BAUD 9600
-#define MYUBRR F_CPU/(long(16) * BAUD) -1
+#define MYUBRR F_CPU / (long(16) * BAUD) - 1
 #define SPEED 255
 #define LEFT_START 120
 #define LEFT_SENSOR 15
@@ -13,6 +13,7 @@
 #define SERVO 9
 #define SERVO_DELAY 9
 #define REACH_DIFF 30
+#define IGNORE 0
 
 
 /*
@@ -21,8 +22,12 @@
 
 #define bitIsSet(macro, bit) ((macro & _BV(bit)))
 #define bitIsClear(macro, bit) (!(macro & _BV(bit)))
-#define loopUntilBitIsSet(macro, bit) do { } while (bitIsSet(macro, bit))
-#define loopUntilBitIsClear(macro, bit) do { } while (bitIsClear(macro, bit))
+#define loopUntilBitIsSet(macro, bit) \
+  do { \
+  } while (bitIsSet(macro, bit))
+#define loopUntilBitIsClear(macro, bit) \
+  do { \
+  } while (bitIsClear(macro, bit))
 
 
 /*
@@ -43,35 +48,33 @@ AF_DCMotor left(2);
 AF_DCMotor right(3);
 Servo servo;
 bool manuallyOn;
-bool reachIncrement = true;
-char reach;
-int servoAngle;
+int servoAngle = CENTER;
+bool reachIncrements[3] = {true, true, false};
+char reaches[3] = {0, 0, 60};
 
 /*
 ////        List of rx commands
 */
 char rxCommands[8][3] = {
-//  {left    ,  right   , weapon  },          // Title          index     alphabet character
-    {FORWARD ,  FORWARD , 0       },          // Forward        0         @
-    {RELEASE ,  FORWARD , 0       },          // Left:          1         A
-    {FORWARD ,  RELEASE , 0       },          // Right:         2         B
-    {BACKWARD,  BACKWARD, 0       },          // Back:          3         C
-    {RELEASE ,  RELEASE , 0       },          // Stop wheels:   4         D
-    {0       ,  0       , FORWARD },          // Weapon on:     5         E
-    {0       ,  0       , RELEASE },          // Weapon off:    6         F
-    {RELEASE ,  RELEASE , RELEASE },          // STOP ALL:      7         G
+  //  {left    ,  right   , weapon  },          // Title          index     alphabet character
+      {FORWARD , FORWARD , IGNORE },            // Forward        0         @
+      {RELEASE , FORWARD , IGNORE },            // Left:          1         A
+      {FORWARD , RELEASE , IGNORE },            // Right:         2         B
+      {BACKWARD, BACKWARD, IGNORE },            // Back:          3         C
+      {RELEASE , RELEASE , IGNORE },            // Stop wheels:   4         D
+      {IGNORE  , IGNORE  , FORWARD},            // Weapon on:     5         E
+      {IGNORE  , IGNORE  , RELEASE},            // Weapon off:    6         F
+      {RELEASE , RELEASE , RELEASE},            // STOP ALL:      7         G
 };
 
-AF_DCMotor rxRecievers[3] = {left, right, weapon};
+AF_DCMotor rxRecievers[3] = { left, right, weapon };
 
 
 /*
 ////        Prototypes
 */
 
-void handleRX();
-void handleFire();
-void putOff(int direction);
+void putOff(int direction, char* reach, bool* reachIncrement);
 void servoWrite(int angle);
 
 
@@ -93,13 +96,22 @@ void setup() {
   */
 
   // Set baud rate
-  UBRR0H =(MYUBRR >> 8);
+  UBRR0H = (MYUBRR >> 8);
   UBRR0L = MYUBRR;
   // Enable receiver and transmitter
   UCSR0B = _BV(RXEN0);
   // Set frame format: 8data, 1stop bit
   UCSR0C = _BV(UCSZ01) | _BV(UCSZ00);
 
+  /*
+    Interrupts
+  */
+
+  // Enable global interrupts
+  sei();
+
+  // Enabling rx interrupt
+  UCSR0B |= _BV(RXCIE0);
 }
 
 
@@ -109,16 +121,54 @@ void setup() {
 
 void loop() {
 
-  // The function responsible for handling bluetooth commands
-  handleRX();
+  /*
+  ////        Main function
+  *
+  *   if fire detected by one of the sensors,
+  *   it putoff the fire in the direction of 
+  *   that sensor
+  *
+  */
 
   // The function responsible for handling fire detection
-  handleFire();
+  []() {
+    // For every sensor of the sensors
+    for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start -= 60) {
+
+      // if fire detected from that senosr
+      if (!digitalRead(sensor)) {
+
+        char index = sensor - LEFT_SENSOR;
+
+        // put off that fire then return
+        putOff(start, &reaches[index], &reachIncrements[index] );
+        return;
+      }
+    }
+
+    // If no fire is detected and also the weapon not turned on manually
+    if (!manuallyOn) {
+
+      // make sure the weapon is not running
+      weapon.run(RELEASE);
+
+      // make the weapon look forward
+      servoWrite(CENTER);
+
+      // Return reach to zero
+      for (char i = 0; i < 2; i++) {
+        reaches[i] = 0;
+        reachIncrements[i] = true;
+      }
+      reaches[2] = 60;
+      reachIncrements[2] = false;
+    }
+  }();
 }
 
 
 /*
-////        handleRX funtion
+////        Handle rx by interrupts
 *
 *   if something found in the rx, it operates
 *   according to it to move the car, and turn
@@ -126,13 +176,7 @@ void loop() {
 *
 */
 
-void handleRX() {
-
-  // If nothing is recived with rx ignore the whole function
-  if (bitIsClear(UCSR0A, RXC0)) {
-    return;
-  }
-
+ISR(USART_RX_vect) {
   // Get the operation code {index} by getting only the first five bits
   char index = UDR0 & ~0b11100000;
 
@@ -143,54 +187,14 @@ void handleRX() {
 
   // For the weapon, make sure to update values of manuallyOn
   switch (rxCommands[index][2]) {
-      case 0:
-        return;
-      case FORWARD:
-        manuallyOn = true;
-        break;
-      default:
-        manuallyOn = false;
-        break;
-    }
- 
-}
-
-
-/*
-////        handleFire funtion
-*
-*   if fire detected by one of the sensors,
-*   it putoff the fire in the direction of 
-*   that sensor
-*
-*/
-
-void handleFire() {
-
-  // For every sensor of the sensors
-  for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start-= 60) {
-
-    // if fire detected from that senosr
-    if (!digitalRead(sensor)) {
-
-      // put off that fire then return
-      putOff(start);
+    case 0:
       return;
-    }
-  }
-
-  // If no fire is detected and also the weapon not turned on manually
-  if (!manuallyOn) {
-    
-    // make sure the weapon is not running
-    weapon.run(RELEASE);
-
-    // make the weapon look forward
-    servoWrite(CENTER);
-
-    // Return reach to zero
-    reach = 0;
-    
+    case FORWARD:
+      manuallyOn = true;
+      break;
+    default:
+      manuallyOn = false;
+      break;
   }
 }
 
@@ -204,31 +208,30 @@ void handleFire() {
 *
 */
 
-void putOff(int direction) {
-  
+void putOff(int direction, char* reach, bool* reachIncrement) {
+
   // Turn on the fan
   weapon.run(FORWARD);
 
-  switch (reachIncrement) {
+  switch (*reachIncrement) {
     case true:
-      if (reach == 60) {
-        reachIncrement = false;
+      if (*reach == 60) {
+        *reachIncrement = false;
         return;
       }
-      reach += REACH_DIFF;
+      *reach += REACH_DIFF;
       break;
     default:
-      if (reach == 0) {
-        reachIncrement = true;
+      if (*reach == 0) {
+        *reachIncrement = true;
         return;
       }
-      reach -= REACH_DIFF;
-      break; 
+      *reach -= REACH_DIFF;
+      break;
   }
 
   // Turn the servo to direction + reach
-  servoWrite(direction + reach);
-
+  servoWrite(direction + *reach);
 }
 
 
@@ -250,7 +253,7 @@ void servoWrite(int angle) {
 
   // For in in the range start to finish
   for (int i = servoAngle; i != angle; i += increment) {
-    
+
     // Write the angle of the servo as the current value
     servo.write(i);
     servoAngle = i;
@@ -259,4 +262,3 @@ void servoWrite(int angle) {
     delay(SERVO_DELAY);
   }
 }
-

@@ -1,11 +1,11 @@
+#ifndef GLOBAL_H
+#define GLOBAL_H
+
 /*
 ////        Defining constants        
 */
 
 #define F_CPU 16000000UL
-#define FORWARD 1
-#define BACKWARD 2
-#define RELEASE 3
 #define __AVR_ATmega328P__
 
 
@@ -29,3 +29,5 @@
 #include <util/delay.h>
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
+
+#endif

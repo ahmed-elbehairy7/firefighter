@@ -13,12 +13,14 @@
 ////        Defining constants
 */
 
-#define NUM_OF_COMMANDS 8
+#define NUM_OF_COMMANDS 11
 #define LEFT_SENSOR PC1
 #define LEFT_START 120
 #define RIGHT_SENSOR PC3
-#define CENTER 90
-#define REACH_DIFF 30
+#define REACH_DIFF 15
+#define LB 0
+#define RB 2
+#define WB 4
 
 
 /*
@@ -31,31 +33,33 @@ Motor right(3);
 Motor motors[3] = {left, right, weapon};
 Servo servo(9);
 bool manuallyOn = false;
-bool reachIncrement;
-uint8_t reach;
+bool reachIncrements[3] = {true, true, false};
+uint8_t reaches[3] = {0, 0, 60};
 
 
 /*
 ////        List of rx commands
 */
 
-uint8_t rxCommands[NUM_OF_COMMANDS][3] = {
-//  {left    ,  right   , weapon  },          // Title          index     alphabet character
-    {FORWARD ,  FORWARD , 0       },          // Forward        0         @
-    {RELEASE ,  FORWARD , 0       },          // Left:          1         A
-    {FORWARD ,  RELEASE , 0       },          // Right:         2         B
-    {BACKWARD,  BACKWARD, 0       },          // Back:          3         C
-    {RELEASE ,  RELEASE , 0       },          // Stop wheels:   4         D
-    {0       ,  0       , FORWARD },          // Weapon on:     5         E
-    {0       ,  0       , RELEASE },          // Weapon off:    6         F
-    {RELEASE ,  RELEASE , RELEASE },          // STOP ALL:      7         G
+uint8_t rxCommands[NUM_OF_COMMANDS] = {
+//  (left     << LB) | (right    << RB) | (weapon   << WB),          // Title         Index     Alphabet Character
+    (FORWARD  << LB) | (FORWARD  << RB) | (IGNORE   << WB),          // Forward        0         @
+    (FORWARD  << LB) | (RELEASE  << RB) | (IGNORE   << WB),          // Right:         1         A
+    (RELEASE  << LB) | (FORWARD  << RB) | (IGNORE   << WB),          // Left:          2         B
+    (BACKWARD << LB) | (BACKWARD << RB) | (IGNORE   << WB),          // Back:          3         C
+    (RELEASE  << LB) | (RELEASE  << RB) | (IGNORE   << WB),          // Stop wheels:   4         D
+    (IGNORE   << LB) | (IGNORE   << RB) | (FORWARD  << WB),          // Weapon on:     5         E
+    (IGNORE   << LB) | (IGNORE   << RB) | (BACKWARD << WB),          // Weapon back:   6         F
+    (IGNORE   << LB) | (IGNORE   << RB) | (RELEASE  << WB),          // Weapon off:    7         G
+    (RELEASE  << LB) | (RELEASE  << RB) | (RELEASE  << WB),          // STOP ALL:      8         H
+    (FORWARD  << LB) | (BACKWARD << RB) | (IGNORE   << WB),          // Super right    9         I
+    (BACKWARD << LB) | (FORWARD  << RB) | (IGNORE   << WB),          // Super left     10        J
 };
-
 
 /*
 ////        Prototypes
 */
-void putOff(int direction);
+void putOff(int direction, uint8_t* reach, bool* reachIncrement);
 
 
 /*
@@ -81,29 +85,15 @@ int main() {
 
 
   /*
-    sleep
-  */
-
-  // PRR = 0b11101101;       // turning off most of power consuming stuff
-  // ADMUX = _BV(ADLAR) | _BV(REFS0); // setting the Adc data register to be left adjusted by the ADLAR pin, Setting also the voltage reference to internal
-
-  // // Enabling sleep mode and setting the sleep mode to idle
-  // SMCR |= _BV(SE);
-
-  // // powering down the adc analog comprator
-  // ACSR |= _BV(ACD);
-
-  // // sleep instruction
-  // sleep_cpu();
-
-  /*
     Main loop
   */
+
 
   while (true)
   {
     []()
     {
+
       // For every sensor of the sensors
       for (char sensor = LEFT_SENSOR, start = LEFT_START; sensor <= RIGHT_SENSOR; sensor++, start -= 60)
       {
@@ -117,119 +107,150 @@ int main() {
         if (bitIsClear(PINC, sensor))
         {
 
-          // put off that fire then return
-          putOff(start);
+          uint8_t index = sensor - LEFT_SENSOR;
+          if (!servo.manual)
+            // put off that fire then return
+            putOff(start, &reaches[index], &reachIncrements[index]);
           return;
         }
       }
 
       // If no fire is detected and also the weapon not turned on manually
       if (!manuallyOn)
-      {
-
         // make sure the weapon is not running
         weapon.run(RELEASE);
-
+      
+      if (!servo.manual)
         // make the weapon look forward
         servo.write(CENTER);
 
         // Return reach to zero
-        reach = 0;
+      for (uint8_t i = 0; i < 2; i++) {
+        reaches[i] = 0;
+        reachIncrements[i] = true;
       }
+      reaches[2] = 60;
+      reachIncrements[2] = false;
+      
     }();
-  }
+    }
   
 
 }
 
 ISR(USART_RX_vect) {
   // Get the operation code {index} by getting only the first five bits
-  uint8_t index = Serial::read() & ~0b11100000;
+  uint8_t read = Serial::read();
 
-  if (index > NUM_OF_COMMANDS) {
+  switch (read)
+  {
+    // Toggle enabling servo
+    // 0
+    case '0':                          
+      servo.enable = !servo.enable;
+      return;
+
+    // Rotate servo to the right
+    // 1
+    case '1':
+      servo.increment(-1);
+      return;
+
+    // Rotate servo to the left
+    // 2
+    case '2':
+      servo.increment(1);
+      return;
+
+    // Stop rotation of servo
+    // 3
+    case '3':
+      servo.done = true;
+      return;
+
+    // Turn manual mode off
+    // 4
+    case '4':
+      servo.manual = false;
+      return;
+  }
+
+  uint8_t index = read & 0x0f;
+  if (index > NUM_OF_COMMANDS - 1) {
     return;
   }
-  Serial::print("Recieved command: ");
-  Serial::print(index);
-  Serial::print('\n');
+  uint8_t command;
 
   // For every motor on the shield, execute the appropriate command
-  for (char i = 0; i < 3; i++) {
-    motors[i].run(rxCommands[index][i]);
+  for (uint8_t i = 0, shift = LB; i < 3; i++, shift+= 2) {
+    command = (rxCommands[index] >> shift) & 0b11;
+    motors[i].run(command);
   }
 
   // For the weapon, make sure to update values of manuallyOn
-  switch (rxCommands[index][2]) {
-      case 0:
-        return;
-      case FORWARD:
-        manuallyOn = true;
-        break;
-      default:
-        manuallyOn = false;
-        break;
-    }
+  switch (command)
+  {
+  case IGNORE:
+    return;
+  case RELEASE:
+    manuallyOn = false;
+    break;
+  default:
+    manuallyOn = true;
+    break;
+  }
 }
 
-void putOff(int direction) {
-  
+void putOff(int direction, uint8_t* reach, bool* reachIncrement) {
+
   // Turn on the fan
   weapon.run(FORWARD);
 
-  switch (reachIncrement) {
+  switch (*reachIncrement) {
     case true:
-      if (reach == 60) {
-        reachIncrement = false;
+      if (*reach == 60) {
+        *reachIncrement = false;
         return;
       }
-      reach += REACH_DIFF;
+      *reach += REACH_DIFF;
       break;
     default:
-      if (reach == 0) {
-        reachIncrement = true;
+      if (*reach == 0) {
+        *reachIncrement = true;
         return;
       }
-      reach -= REACH_DIFF;
-      break; 
+      *reach -= REACH_DIFF;
+      break;
   }
 
   // Turn the servo to direction + reach
-  servo.write(direction + reach);
-
+  servo.write(direction + *reach);
 }
-uint8_t n = 0;
 
-SIGNAL(TIMER1_COMPA_vect) {
 
-   if( n < 0 )
-    TCNT1 = 0; // channel set to -1 indicated that refresh interval completed so reset the timer
-  else{
-      PORTD &= ~_BV(servo.pin); // pulse this channel low
-  }
 
-  n++;    // increment to the next channel
-  if( n < 1) {
+bool servoOn = false;
+
+ISR(TIMER1_COMPA_vect) {
+
+  switch (servoOn)
+  {
+  case false:
+    TCNT1 = 0;
     OCR1A = TCNT1 + servo.ticks;
-    PORTD |= _BV(servo.pin); // it's an active channel so pulse it high
-  }
-  else {
-    if( TCNT1 + 4 < usToTicks(REFRESH_INTERVAL) )  // allow a few ticks to ensure the next OCR1A not missed
-      OCR1A = (unsigned int)usToTicks(REFRESH_INTERVAL);
+    if (servo.enable){
+      PORTB |= _BV(servo.pin);
+      servoOn = true;
+    }
+    break;
+  case true:
+    PORTB &= ~_BV(servo.pin);
+    if (TCNT1 + 4 < usToTicks(REFRESH_INTERVAL))
+      OCR1A = usToTicks(REFRESH_INTERVAL);
     else
-      OCR1A = TCNT1 + 4;  // at least REFRESH_INTERVAL has elapsed
-    n -1; // this will get incremented at the end of the refresh period to start again at the first channel
+      OCR1A = TCNT1 + 4;
+    servoOn = false;
+    break;
   }
 
-  // TCNT1 = 0;
-
-  // PORTD &= ~_BV(servo.pin);
-
-  // OCR1A = TCNT1 + servo.ticks;
-
-  // PORTD |= _BV(servo.pin);
-
-  // if (TCNT1 + 4 < usToTicks(REFRESH_INTERVAL)) // allow a few ticks to ensure the next OCR1A not missed
-  //   OCR1A = (unsigned int)usToTicks(REFRESH_INTERVAL);
-  // else
-  //   OCR1A = TCNT1 + 4; // at least REFRESH_INTERVAL has elapsed
 }
